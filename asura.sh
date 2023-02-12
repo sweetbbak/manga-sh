@@ -5,6 +5,7 @@ version="0.1.0"
 cache_dir="$HOME"/.cache/asuradl/
 raw_html="$cache_dir"asura-homepg
 db_file="$cache_dir"asura-db.json
+thumbnails="$cache_dir"thumbnails
 agent="Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:49.0) Gecko/20100101 Firefox/49.0"
 
 # -d is "if file exists and is a dir" - -f for file
@@ -46,6 +47,7 @@ get_ch_list() {
   ch_list=$(curl -s -A "$agent" "$1")
   rd_chapter="$(printf "%s\n" "$ch_list" | pup 'div[id="chapterlist"] a[href] json{}' | jq '.[].href' | fzf --cycle --with-nth 4 --delimiter '/' | sed 's/"//g' | tr -d '[:space:]')" 
   gum style --border double --foreground 212 "$rd_chapter"
+  title="$(printf "%s" "$rd_chapter" | cut -d '/' -f4 | sed 's/"//g' | tr -d '[:space:]')"
   dl_images "$rd_chapter"
 }
 
@@ -57,22 +59,34 @@ download_images() {
 }
 
 dl_images() {
-  gum style --foreground 212 'dl_images... mktemp & get images & async py dl'
+  gum style --foreground 212 "$title"
   tmp_file="$(mktemp -t mytemp-XXXXXX)"
-  echo "$tmp_file"
+  # echo "$tmp_file"
   curl -s -A "$agent" "$1" > "$tmp_file"
   cat "$tmp_file" | pup 'div[class="rdminimal"] p img json{}' | jq '.[].src'| sed 's/"//g' > "$HOME"/src/asura-bash/images.txt
   rm "$tmp_file"
   gum spin -- python3 "$HOME"/src/asura-bash/async-imgdl.py "$HOME"/src/asura-bash/images.txt
+  cd Images || exit
+  zip -q tmp.cbz *
+  mv tmp.cbz "$HOME/src/asura-bash/${title}.cbz" && cd "$HOME/src/asura-bash" || exit
+  [ -d "$HOME/src/asura-bash/Images" ] && rm -rf Images || exit
+  rmg "${title}".cbz
+  exit
 }
 
 fp2_json() {
-  gum style --foreground 212 'fp2-json parsing front page'
+  # json-ify our raw html so we can parse it
   results_raw_json=$(printf "%s\n" "$home_pg" | pup 'div[class="luf"] json{}')
-  # printf "%s" "$results_json" | jq '.[] | [.children[0].href, .children[0].title, "\(.children[1].children[].children[0].href)"]'
+  # get images had to split json of images, too far separated from useful info
+  img_raw=$(printf "%s\n" "$home_pg"| pup 'div[class="utao styletwo"] json{}')
+  # parse json for the images and make a list
+  img_json=$(printf "%s\n" "$img_raw" | jq '.[]|.children[].children[0].children[0].children[0] | .src')
   #print JSON of title, link and latest chapter :)
   fp_json=$(printf "%s\n" "$results_raw_json" | jq '.[] | {title: .children[0].title, link: .children[0].href, latest: "\(.children[1].children[0].children[0].href)"}' | jq -s '.')
+  # print our main json to a "database" file
   printf "%s\n" "$fp_json" > "$db_file"
+  # print our images to a separate json file
+  printf "%s\n" "$img_json" > "$thumbnails"
 }
 
 read_data() {
@@ -80,7 +94,7 @@ read_data() {
   cat "$db_file" | jq '.[].title' |\
     fzf \
       --cycle \
-      --bind 'o:execute(cat '"$db_file"' | jq ".[{n}].latest")+abort' \
+      --bind 'o:execute(cat '"$db_file"' | jq ".[{n}].latest"| xargs firefox)+abort' \
       --bind 'enter:execute(cat '"$db_file"' | jq ".[{n}].link")+abort' \
       --preview='cat '"$db_file"' | jq ".[{n}]"'
 }
@@ -108,7 +122,7 @@ update_exit() {
   dblines="$(cat "$db_file" | jq ".[].title" | wc -l)"
   gum style --border double --foreground 212 "Updated ${dblines} entries to Asura Scans database"
   # exit 0
-  sleep 1
+  # sleep 1
   fzf_main
 }
 
@@ -134,7 +148,7 @@ done
 }
 
 fzf_main() {
-  fzfopt="$(printf "%s\n" "1:Update chapters" "2:Pick manhwa" "3:Exit" | fzf --with-nth 2 --delimiter ":" | cut -d ':' -f1)"
+  fzfopt="$(printf "%s\n" "1:Update chapters" "2:Pick manhwa to download" "3:View cache" "4:Exit"| fzf --with-nth 2 --delimiter ":" | cut -d ':' -f1)"
   case "$fzfopt" in
     1)
     update_exit
@@ -143,6 +157,9 @@ fzf_main() {
     main
     ;;
     3)
+    read_data
+    ;;
+    4)
     exit 0
     ;;
   esac
