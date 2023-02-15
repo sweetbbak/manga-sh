@@ -1,0 +1,92 @@
+#!/bin/bash
+
+url="https://readchainsaw.online"
+agent="Mozilla/5.0 (X11; Linux x86_64; rv:60.0) Gecko/20100101 Firefox/107.0"
+version="0.3.0"
+cache_dir="$HOME/.cache/asuradl"
+raw_html="$cache_dir"/chainsaw-pg
+links="$cache_dir"/links.txt
+
+# pup 'figure[class="wp-block-gallery columns-2 is-cropped aligncenter"] ul[class="su-posts su-posts-list-loop "] li'  |grep -io '<a href=['"'"'"][^"'"'"']*['"'"'"]' | sed -e 's/^<a href=["'"'"']//i' -e 's/["'"'"']$//i' | wc -l
+
+# -d is "if file exists and is a dir" - -f for file
+if [[ ! -d "$cache_dir" ]]; then
+  mkdir -p "$cache_dir"
+fi
+
+version_info() {
+  printf "%s" "$version"
+}
+
+get_latest() {
+  # get the raw front page html
+  curl -s -A "$agent" "$url" > "$raw_html"
+  home_pg=$(cat "$raw_html")
+}
+
+extract_links() {
+  printf "%s\n" "$home_pg" | \
+    pup 'figure[class="wp-block-gallery columns-2 is-cropped aligncenter"] ul[class="su-posts su-posts-list-loop "] li'|\
+    grep -io '<a href=['"'"'"][^"'"'"']*['"'"'"]' |\
+    sed -e 's/^<a href=["'"'"']//i' -e 's/["'"'"']$//i' > "$links"
+}
+
+updates() {
+  # -s if file exists and is greater than zero then compare 
+  # chapter count before and after update to see if there is a new chapter
+  if [[ -s "$links" ]]; then
+    count=$(wc -l < "$links")
+    get_latest && extract_links
+    update_count=$(wc -l < "$links")
+    if (( update_count > count )); then
+      sed -n 1p < "$links"
+    else 
+      printf "%s\n" "No new chapters: ${count} chapters"
+    fi
+  else
+    get_latest
+  fi
+}
+
+fzfr() {
+  fzf -m -x | tr '\n' '\0' | xargs -r0 "$@"
+}
+
+fzf_main() {
+  cat "$links" | fzf --preview 'echo {} | cut -d"/" -f5'\
+    --bind "o:execute(echo {} | xargs firefox)+abort"
+}
+
+ez_dl() {
+  tempfile=$(mktemp)
+  tempdir=$(mktemp -d)
+  chapter="$(fzf_main)"
+  title="$(printf "%s\n" "$chapter" | cut -d"/" -f5 | tr -d "[:space:]" )"
+  wget "$agent" --no-check-certificate "$chapter" -q -O - > "$tempfile" 
+  cat "$tempfile" | grep -Po "(?<=src=\")[^^\"]*" | grep "jpg" | grep "Chapter" | wget -i - -nd -r --level=1 -e robots=off -A jpg,jpeg -P "$tempdir"
+  cd "$tempdir" && zip "$title".cbz -- *.jpg && mv "$title".cbz "$HOME/src/asura-bash" && rm -rf "$tempdir"
+}
+
+main() {
+  get_latest
+  extract_links
+  ez_dl
+}
+
+# case statements to handle pre-arguments - pass off to main menu
+case "$1" in
+  -u|--update) 
+    updates
+  ;;
+  -v|--version)
+    version_info
+  ;;
+  -b|--bookmark)
+  bookmark
+  ;;
+  *)
+  main
+  ;;
+  
+esac
+
