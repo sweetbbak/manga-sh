@@ -1,12 +1,15 @@
 #!/bin/bash
 
 url="https://www.asurascans.com/"
-version="0.1.0"
+version="0.3.0"
 cache_dir="$HOME"/.cache/asuradl/
 raw_html="$cache_dir"asura-homepg
 db_file="$cache_dir"asura-db.json
 thumbnails="$cache_dir"thumbnails
 agent="Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:49.0) Gecko/20100101 Firefox/49.0"
+manga_reader="$(which rmg)"
+# manga_reader='nsxiv'
+# manga_reader='zathura'
 
 # -d is "if file exists and is a dir" - -f for file
 if [[ ! -d "$cache_dir" ]]; then
@@ -18,11 +21,9 @@ version_info() {
 }
 
 get_latest() {
-  # [ -f "$cache_dir"index.html ] && rm "$cache_dir"index.html
+  # get the raw front page html
   curl -s -A "$agent" "$url" > "$raw_html"
-  # cat "$cache_dir"index.html > "$raw_html"
   home_pg=$(cat "$raw_html")
-  # rm "$cache_dir"index.html
 }
 
 update_frontpage() {
@@ -46,20 +47,13 @@ fi
 get_ch_list() {
   ch_list=$(curl -s -A "$agent" "$1")
   rd_chapter="$(printf "%s\n" "$ch_list" | pup 'div[id="chapterlist"] a[href] json{}' | jq '.[].href' | fzf --cycle --with-nth 4 --delimiter '/' | sed 's/"//g' | tr -d '[:space:]')" 
-  gum style --border double --foreground 212 "$rd_chapter"
+  # gum style --border double --foreground 212 "$rd_chapter"
   title="$(printf "%s" "$rd_chapter" | cut -d '/' -f4 | sed 's/"//g' | tr -d '[:space:]')"
   dl_images "$rd_chapter"
 }
 
-download_images() {
-  titledir="$(printf "%s" "$1" | cut -d '/' -f4 | sed 's/"//g' | tr -d '[:space:]')"
-  mkdir -p "$cache_dir""$titledir"
-  gum spin -- wget -P "$cache_dir""$titledir" -q -U "$agent" -nd -r --level=1 -e robots=off -A jpg,jepg -H "$1"
-  cd "$cache_dir""$titledir" && ouch compress "$(\ls -v *.jpg)" 
-}
-
 dl_images() {
-  gum style --foreground 212 "$title"
+  gum style --border thick --border-foreground 212 --underline --foreground 212 --bold "$title"
   tmp_file="$(mktemp -t mytemp-XXXXXX)"
   # echo "$tmp_file"
   curl -s -A "$agent" "$1" > "$tmp_file"
@@ -70,7 +64,8 @@ dl_images() {
   zip -q tmp.cbz *
   mv tmp.cbz "$HOME/src/asura-bash/${title}.cbz" && cd "$HOME/src/asura-bash" || exit
   [ -d "$HOME/src/asura-bash/Images" ] && rm -rf Images || exit
-  rmg "${title}".cbz
+  "$manga_reader" "${title}".cbz
+  # rmg "${title}".cbz
   exit
 }
 
@@ -81,7 +76,7 @@ fp2_json() {
   img_raw=$(printf "%s\n" "$home_pg"| pup 'div[class="utao styletwo"] json{}')
   # parse json for the images and make a list
   img_json=$(printf "%s\n" "$img_raw" | jq '.[]|.children[].children[0].children[0].children[0] | .src')
-  #print JSON of title, link and latest chapter :)
+  # print JSON of title, link and latest chapter :)
   fp_json=$(printf "%s\n" "$results_raw_json" | jq '.[] | {title: .children[0].title, link: .children[0].href, latest: "\(.children[1].children[0].children[0].href)"}' | jq -s '.')
   # print our main json to a "database" file
   printf "%s\n" "$fp_json" > "$db_file"
@@ -90,7 +85,6 @@ fp2_json() {
 }
 
 read_data() {
-  # tmpfile=$(cat "$db_file")
   cat "$db_file" | jq '.[].title' |\
     fzf \
       --cycle \
@@ -126,27 +120,7 @@ update_exit() {
   fzf_main
 }
 
-zip_target() {
-  for target in "$@"; do
-    if [[ -e "$target" ]]; then # does exist
-      if [[ -r "$target" ]]; then # is readable
-        if [[ -d "$target" ]]; then  # is dir
-          archive=${target%/}
-          echo "Archiving: $target"
-          echo "zip -mTy9 \"$archive.cbz" \"$target"" # -x \"*.DS_Store\" \"*[Tt]humbs.db\"" 
-          zip -mTy9 "$archive.cbz" "$target" # -x "*.DS_Store" "*[Tt]humbs.db"
-        else
-          echo "Not a directory: $target"
-        fi
-      else
-        echo "Not readable: $target "
-      fi
-    else
-      echo "Not found: $target"
-    fi
-done
-}
-
+# main menu. update => udpate frontpage -- main => main -- read-data => send manhwa to fzf -- exit => :)
 fzf_main() {
   fzfopt="$(printf "%s\n" "1:Update chapters" "2:Pick manhwa to download" "3:View cache" "4:Exit"| fzf --with-nth 2 --delimiter ":" | cut -d ':' -f1)"
   case "$fzfopt" in
@@ -165,12 +139,16 @@ fzf_main() {
   esac
 }
 
+# 
 main() {
+  # capture output from selecting a manhwa from our "database" file
   link_opt=$(read_data)
+  # sanitize the option (remove quotations and trim space) send to read_handler
   link_opt=$(echo "$link_opt"|sed 's/\"//g'|tr -d '[:space:]')
   read_handler "$link_opt"
 }
 
+# case statements to handle pre-arguments - pass off to main menu
 case "$1" in
   -u|--update) 
     update_exit
